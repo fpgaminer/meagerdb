@@ -1,0 +1,114 @@
+Meager Database
+==========================
+
+
+Title - STRING
+User Name - STRING
+Password - STRING
+URL - STRING
+Notes - STRING
+Category - STRING
+
+
+Except for the Database Header, all data is encrypted and MAC'd.  Everything is broken up into Pages.  Pages must be a multiple of the encryption block size.  All data structures begin at the boundary of a Page.
+
+There is support for only one table (multiple tables may be handled by using multiple database files).
+
+Column 0 in any Row is always rowid (uint32, assigned automatically).
+
+Encryption Tweak is that chunk of data's byte location in the database file.
+
+If the Column Count for a row is 0, that row represents blank data in the database file, which can be reclaimed
+for a new row.  Except if that row's first Page corresponds to the Table Header pointer.
+
+Integers are stored little endian.
+
+A row with length 0 and column_count 0 indicates the end of the database.
+
+When opening the database, if Journal 2 is a valid Page (correct MAC), it must be processed.  Nuke Journal 1; nuke the row Journal 2 points to (by writing the specified Page Count, 0 for column_count, and zeroing everything else); nuke Journal 2.  Otherwise, if Journal 1 is valid: nuke the row; nuke Journal 1.
+
+All data structures are padded to align with Pages.  Padding is always 0.
+
+
+Here is how to perform modifications to rows.  These are all designed such that if power is lost at any point, the database can recover instantly.
+
+INSERT:  Search for an empty row big enough to fit the new row, or add a new row to the end of the database.  In both cases, record the targetted row in Journal 1 first.  After the row has been inserted, nuke the journal.
+
+UPDATE:  Follow the steps in INSERT to insert the updated row, but don't nuke the journal yet.  Point Journal 2 at the old row.  Nuke the old row.  Nuke journal 1.  Nuke journal 2.
+
+DELETE:  Record the targetted row in Journal 1.  Nuke the row.  Nuke the journal.
+
+
+Normal INSERT operations would have the entire new row's data immediately available.  To allow inserting very large rows, INSERT should support being multi-stepped.  First, a call is made to insert a row with a given quantity of row data.  The new row should be added, but the journal should not be nuked yet (row isn't complete).  Then one or more calls are made to provide the row data in one or many pieces.  Then a finalize function is called, which nukes the journal (row is completed).  It may be possible to handle UPDATE in the same way...  And of course, the simple INSERT function call can just call out to the multi-stepped API.
+
+
+
+Database Layout:
+	* Database Header (padded to multiple of Page)
+	* Journal 1 (padded to multiple of Page)
+	* Journal 2 (padded to multiple of Page)
+	* Row(s)
+
+
+
+
+Column Types
+------------
+0) NONE
+1) STRING
+2) UINT32
+
+
+Variable Length Integer
+-----------------------
+Encoded little endian:
+
+< 0xfd:                 Store as a single uint8
+<= 0xffff:              0xfd followed by uint16
+<= 0xffffffff:          0xfe followed by uint32
+<= 0xffffffffffffffff:  0xff followed by uint64
+
+
+
+Column Type Data Formats
+------------------------
+
+STRING:
+	* ?   varint   String Length
+	* *   string   String data
+
+UINT32
+	* 4   uint32   Value
+
+
+
+Database Data Formats
+---------------------
+
+Database Header:
+	* 8   string   "MEAGERDB"
+	* 2   uint16   Version (0x0100)
+	* 4   uint32   Page Size
+	* 32  binary   Unique DB ID
+
+
+Database Header Encryption Parameters:
+	* 64  binary   Password Salt
+	* 32  string   Key Derivation Function (e.g. "PBKDF2-HMAC-SHA-256")
+	* 32           Key Derivation Parameters (e.g. iteration count)
+	* 128 binary   Encrypted Keys
+	* 32  binary   MAC of DB Header and everything above
+	* 32  binary   HASH of DB Header and everything above
+
+
+Journal:
+	* 4   uint32   Page Start
+	* 4   uint32   Page Count
+
+
+Row:
+	* 4   uint32   Page Count
+	* 4   uint32   Row ID  (0 for empty row)
+	* 1   uint8    Table ID
+	* 4   uint32   Value Length
+	* *            Value Data
