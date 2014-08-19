@@ -1,49 +1,95 @@
-Meager Database
+Meager Database File Format
 ==========================
 
 
-Title - STRING
-User Name - STRING
-Password - STRING
-URL - STRING
-Notes - STRING
-Category - STRING
+ * Integers are stored little endian.
 
 
-Except for the Database Header, all data is encrypted and MAC'd.  Everything is broken up into Pages.  Pages must be a multiple of the encryption block size.  All data structures begin at the boundary of a Page.
+Major Concepts
+--------------
 
-There is support for only one table (multiple tables may be handled by using multiple database files).
+After the header, the entire database is organized into fixed size chunks of data, called Pages.  The first two pages are always Journal 0, and Journal 1.  All the other Pages belong to Rows.
 
-Column 0 in any Row is always rowid (uint32, assigned automatically).
+A Row always begins at the beginning of a Page, and spans some integer multiple of Pages (at least 1).  A Row has a RowID, TableID, and some data (Value).
 
-Encryption Tweak is that chunk of data's byte location in the database file.
+A Row with a Page Count of 0 marks the end of the database.
 
-If the Column Count for a row is 0, that row represents blank data in the database file, which can be reclaimed
-for a new row.  Except if that row's first Page corresponds to the Table Header pointer.
+A Row with a RowID of 0 marks an empty row.  Empty rows must have a Page Count of 1.
 
-Integers are stored little endian.
-
-A row with length 0 and column_count 0 indicates the end of the database.
-
-When opening the database, if Journal 2 is a valid Page (correct MAC), it must be processed.  Nuke Journal 1; nuke the row Journal 2 points to (by writing the specified Page Count, 0 for column_count, and zeroing everything else); nuke Journal 2.  Otherwise, if Journal 1 is valid: nuke the row; nuke Journal 1.
-
-All data structures are padded to align with Pages.  Padding is always 0.
-
-
-Here is how to perform modifications to rows.  These are all designed such that if power is lost at any point, the database can recover instantly.
-
-INSERT:  Search for an empty row big enough to fit the new row, or add a new row to the end of the database.  In both cases, record the targetted row in Journal 1 first.  After the row has been inserted, nuke the journal.
-
-UPDATE:  Follow the steps in INSERT to insert the updated row, but don't nuke the journal yet.  Point Journal 2 at the old row.  Nuke the old row.  Nuke journal 1.  Nuke journal 2.
-
-DELETE:  Record the targetted row in Journal 1.  Nuke the row.  Nuke the journal.
-
-
-Normal INSERT operations would have the entire new row's data immediately available.  To allow inserting very large rows, INSERT should support being multi-stepped.  First, a call is made to insert a row with a given quantity of row data.  The new row should be added, but the journal should not be nuked yet (row isn't complete).  Then one or more calls are made to provide the row data in one or many pieces.  Then a finalize function is called, which nukes the journal (row is completed).  It may be possible to handle UPDATE in the same way...  And of course, the simple INSERT function call can just call out to the multi-stepped API.
+Journal 0 and Journal 1 are used to maintain database consistency during Insert, Update, and Delete operations.
 
 
 
-Database Layout:
+Encryption
+----------
+Except for the Database Header, all data is encrypted and MAC'd.  The Threefish-512 block cipher is used for Encryption.  HMAC-SHA-256 is used for Authentication.  Both use separate keys, 64-bytes each.  The keys are stored in the Database Header, encrypted using a Derived Encryption Key.  The Derived Encryption Key is derived using the Password Salt and the Database Password.  The Database Header also includes a MAC, calculated using the Derived MAC Key, so that all data in the header is authenticated and the Database Keys are Encrypt-then-MAC.
+
+Separating the Derived Keys from the Database Keys allows the Database Password to be changed without having to re-write the entire database.
+
+Every Page is encrypted, and followed by a MAC of that Page (Encrypt-then-MAC).  Encryption Tweak is that Page's byte location in the database file.  A MAC tweak is also used, and is again the Page's byte location in the database file.  The MAC tweak is applied by appending the tweak to the end of the data to be MAC'd.  This makes the database more robust against scenarios where an attacker may try to move Pages around.
+
+
+
+Update Database Password
+------------------------
+
+The Database Password may be updated by creating a new Database Header Encryption Parameters (DHEP) block.  Overwrite the DHEP block that is not currently in use (the first non-valid DHEP).  Then erase the old DHEP.  This way, if the operation is halted at any moment, the database will not become corrupted.  The new password will only take effect when the operation is completed.
+
+
+
+Columns
+-------
+
+The underlying database does not have a concept of columns.  Rows merely store a single, arbitrary length value.  A per-row Key-Value scheme is layered on top of the database using the keyvalue.h/.c module.  The application may choose to roll their own schemes.
+
+
+
+Journals
+--------
+
+There are two journals, Journal 0 and Journal 1.  They are used during Insert, Update, and Delete operations to keep the database consistent.  Each journal references a span of pages.
+
+When opening the database, the journals should be checked and acted upon if valid.  If Journal 1 is valid, replace the specified range of pages with empty rows.  Then invalidate Journal 0 and Journal 1 (in that order).  If, only Journal 0 is valid, replace the specified range of pages with empty rows.  Then invalid both journals.  Both journals may, of course, be invalid when opening the database.
+
+
+
+Insert
+------
+
+Insertion is performed by finding, or creating, a span of empty rows big enough to hold the new row.  Record this span in Journal 0.  Create the new row over the old, empty rows.  Erase Journal 0.
+
+If Insert is not finished (power-loss, etc), the next time the database is opened the incomplete row will be removed.
+
+
+
+Update
+------
+
+Update is performed by finding, or creating, a span of empty rows big enough to hold the updated row.  Record this span in Journal 0.  Create the updated row over the empty rows.  Now use Journal 1 to target the outdated row that we are updating.  Destroy the old row (convert into 1 or more empty rows).  Erase Journal 0.  Erase Journal 1.
+
+If Update is not finished (power-loss, etc), the next time the database is opened the update may be rolled back.  Depending on when the operation was interrupted, the Update may still complete.
+
+
+
+Delete
+------
+
+Delete is performed by recording the row in Journal 0.  Destroy the row.  Erase Journal 0.
+
+If Delete is not finished (power-loss, etc), the next time the database is opened the delete will be completed.
+
+
+
+Key-Value Scheme
+----------------
+The built-in key-value scheme, allowing per row key-value stores, is implemented using a simple data format.  The row's value will consist of 0 or more Key-Value Chunks, one after the other.
+
+Keys are of fixed length, 8 bytes by default.
+
+
+
+Database Layout
+---------------
 	* Database Header (padded to multiple of Page)
 	* Journal 1 (padded to multiple of Page)
 	* Journal 2 (padded to multiple of Page)
@@ -51,39 +97,8 @@ Database Layout:
 
 
 
-
-Column Types
-------------
-0) NONE
-1) STRING
-2) UINT32
-
-
-Variable Length Integer
------------------------
-Encoded little endian:
-
-< 0xfd:                 Store as a single uint8
-<= 0xffff:              0xfd followed by uint16
-<= 0xffffffff:          0xfe followed by uint32
-<= 0xffffffffffffffff:  0xff followed by uint64
-
-
-
-Column Type Data Formats
+Database Data Structures
 ------------------------
-
-STRING:
-	* ?   varint   String Length
-	* *   string   String data
-
-UINT32
-	* 4   uint32   Value
-
-
-
-Database Data Formats
----------------------
 
 Database Header:
 	* 8   string   "MEAGERDB"
@@ -97,8 +112,8 @@ Database Header Encryption Parameters:
 	* 32  string   Key Derivation Function (e.g. "PBKDF2-HMAC-SHA-256")
 	* 32           Key Derivation Parameters (e.g. iteration count)
 	* 128 binary   Encrypted Keys
-	* 32  binary   MAC of DB Header and everything above
-	* 32  binary   HASH of DB Header and everything above
+	* 32  binary   MAC of DB Header and this structure (except HASH and MAC)
+	* 32  binary   HASH of DB Header and this structure (except HASH)
 
 
 Journal:
@@ -110,5 +125,11 @@ Row:
 	* 4   uint32   Page Count
 	* 4   uint32   Row ID  (0 for empty row)
 	* 1   uint8    Table ID
+	* 4   uint32   Value Length
+	* *            Value Data
+
+
+Key-Value Chunk:
+	* 8   binary   Key
 	* 4   uint32   Value Length
 	* *            Value Data

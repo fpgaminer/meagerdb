@@ -12,6 +12,7 @@
 
 #define JOURNAL0  0
 #define JOURNAL1  1
+#define FIRST_PAGE 2
 
 #define ENCRYPTION_KEY_SIZE 64
 #define MAC_KEY_SIZE 64
@@ -46,10 +47,12 @@ static struct
 	uint64_t page_offset;      /* File position where Pages start */
 
 	/* Selected Page */
-	uint32_t current_page;
-	uint32_t current_page_count;
+	uint32_t selected_page;
+	uint32_t selected_page_count;
 
-	/* Offset into row currently begin created */
+	/* Row being inserted */
+	uint32_t insert_page;
+	uint32_t insert_page_count;
 	uint32_t insert_offset;
 
 	/* Pointer to old page during an update */
@@ -230,6 +233,8 @@ int mdb_open (char const *path, uint8_t const *password, size_t password_len)
 	/* Open database file */
 	if (g_database.fp)
 		return MDBE_ALREADY_OPEN;
+	
+	memset (&g_database, 0, sizeof (g_database));
 
 	if ((g_database.fp = mdba_fopen (path, "r+b")) == 0)
 		return MDBE_FOPEN;
@@ -326,12 +331,6 @@ int mdb_open (char const *path, uint8_t const *password, size_t password_len)
 
 	/* Additional DB parameters */
 	g_database.page_offset = roundup_uint64 (MDB_HEADER_SIZE + MDB_HEADER_PARAMS_SIZE*2, g_database.page_size);
-	g_database.current_page = 0;
-	g_database.current_page_count = 0;
-	g_database.update_page = 0;
-	g_database.update_page_count = 0;
-	g_database.insert_offset = 0;
-	g_database.tmp_page = 0;
 
 	/* Cleanup Journal */
 	if ((err = cleanup_journal ()))
@@ -591,6 +590,9 @@ int mdb_insert_begin (uint8_t table, uint32_t valuelen)
 	if ((valuelen + 13) <= valuelen)
 		return MDBE_DATA_TOO_BIG;
 
+	if (g_database.insert_page)
+		return MDBE_BUSY;
+
 	int err;
 	uint32_t page_count = MAX (1, (valuelen + 13) / g_database.page_size);
 	uint32_t page_start;
@@ -603,6 +605,7 @@ int mdb_insert_begin (uint8_t table, uint32_t valuelen)
 	if ((err = find_empty_row (&page_start, page_count)))
 		return err;
 
+	/* Write row header */
 	memset (g_database.tmp, 0, g_database.page_size);
 	pack_uint32_little (g_database.tmp, page_count);
 	pack_uint32_little (g_database.tmp+4, rowid);
@@ -612,9 +615,9 @@ int mdb_insert_begin (uint8_t table, uint32_t valuelen)
 	if ((err = write_page (page_start)))
 		return err;
 
-	g_database.current_page = page_start;
+	g_database.insert_page = page_start;
+	g_database.insert_page_count = page_count;
 	g_database.insert_offset = 13;
-	g_database.current_page_count = page_count;
 
 	return 0;
 }
@@ -627,7 +630,7 @@ int mdb_insert_continue (void const *data, size_t len)
 	if (!g_database.fp)
 		return MDBE_NOT_OPEN;
 
-	if (g_database.current_page < 2 || g_database.current_page_count == 0)
+	if (g_database.insert_page < FIRST_PAGE || g_database.insert_page_count == 0)
 		return MDBE_NO_ROW_SELECTED;
 
 	while (len)
@@ -637,17 +640,17 @@ int mdb_insert_continue (void const *data, size_t len)
 		uint32_t available = g_database.page_size - page_offset;
 		uint32_t l = MIN (len, available);
 
-		if (page == g_database.current_page_count)
+		if (page >= g_database.insert_page_count)
 			return -1;
 
-		if ((err = read_page (g_database.current_page + page)))
+		if ((err = read_page (g_database.insert_page + page)))
 			return err;
 
 		memmove (g_database.tmp+page_offset, data, l);
-		data += l;
+		data = (uint8_t const *)data + l;
 		len -= l;
 
-		if ((err = write_page (g_database.current_page + page)))
+		if ((err = write_page (g_database.insert_page + page)))
 			return err;
 
 		g_database.insert_offset += l;
@@ -660,10 +663,18 @@ int mdb_insert_continue (void const *data, size_t len)
 int mdb_insert_finalize (void)
 {
 	int err;
+
+	if (g_database.insert_page < FIRST_PAGE || g_database.insert_page_count == 0)
+		return -1;
 	
 	/* Close journal */
 	if ((err = set_journal (JOURNAL0, 0, 0)))
 		return err;
+
+	g_database.selected_page = g_database.insert_page;
+	g_database.selected_page_count = g_database.insert_page_count;
+	g_database.insert_page = 0;
+	g_database.insert_page_count = 0;
 
 	return 0;
 }
@@ -689,13 +700,13 @@ int mdb_insert (uint8_t table, void const *value, uint32_t valuelen)
 int mdb_read_value (void *dst, uint32_t offset, size_t len)
 {
 	int err;
-	uint64_t datalen = g_database.current_page_count * g_database.page_size;
+	uint64_t datalen = g_database.selected_page_count * g_database.page_size;
 	uint8_t *pdst = (uint8_t *)dst;
 
 	if (!g_database.fp)
 		return MDBE_NOT_OPEN;
 
-	if (g_database.current_page < 2 || g_database.current_page_count == 0)
+	if (g_database.selected_page < FIRST_PAGE || g_database.selected_page_count == 0)
 		return MDBE_NO_ROW_SELECTED;
 
 	/* Skip header */
@@ -704,17 +715,17 @@ int mdb_read_value (void *dst, uint32_t offset, size_t len)
 	while (len)
 	{
 		if (real_offset >= datalen)
-			return -1;
+			return MDBE_NOT_ENOUGH_DATA;
 
 		uint32_t page = real_offset / g_database.page_size;
 		uint32_t page_offset = real_offset - (page * g_database.page_size);
 		uint32_t maxlen = g_database.page_size - page_offset;
 		uint32_t l = MIN (maxlen, len);
 
-		if ((err = read_page (g_database.current_page + page)))
+		if ((err = read_page (g_database.selected_page + page)))
 			return err;
 
-		memmove (pdst, g_database.tmp, l);
+		memmove (pdst, g_database.tmp + page_offset, l);
 		pdst += l;
 		real_offset += l;
 		len -= l;
@@ -724,7 +735,7 @@ int mdb_read_value (void *dst, uint32_t offset, size_t len)
 }
 
 
-int mdb_get_value (void *dst, size_t maxlen)
+int64_t mdb_get_value (void *dst, size_t maxlen)
 {
 	int err;
 	uint32_t valuelen;
@@ -732,16 +743,13 @@ int mdb_get_value (void *dst, size_t maxlen)
 	if (!g_database.fp)
 		return MDBE_NOT_OPEN;
 
-	if (g_database.current_page < 2 || g_database.current_page_count == 0)
+	if (g_database.selected_page < FIRST_PAGE || g_database.selected_page_count == 0)
 		return MDBE_NO_ROW_SELECTED;
 
-	if ((err = read_page (g_database.current_page)))
+	if ((err = read_page (g_database.selected_page)))
 		return err;
 
 	valuelen = unpack_uint32_little (g_database.tmp + 9);
-
-	if (((int)valuelen) < 0)
-		return MDBE_DATA_TOO_BIG;
 
 	if (dst)
 	{
@@ -752,7 +760,7 @@ int mdb_get_value (void *dst, size_t maxlen)
 			return err;
 	}
 
-	return valuelen;
+	return (int64_t)valuelen;
 }
 
 
@@ -763,10 +771,10 @@ int mdb_get_rowid (uint8_t *table, uint32_t *rowid)
 	if (!g_database.fp)
 		return MDBE_NOT_OPEN;
 
-	if (g_database.current_page < 2 || g_database.current_page_count == 0)
+	if (g_database.selected_page < FIRST_PAGE || g_database.selected_page_count == 0)
 		return MDBE_NO_ROW_SELECTED;
 
-	if ((err = read_page (g_database.current_page)))
+	if ((err = read_page (g_database.selected_page)))
 		return err;
 
 	if (table)
@@ -784,21 +792,21 @@ int mdb_get_page (uint32_t *page)
 	if (!g_database.fp)
 		return MDBE_NOT_OPEN;
 
-	if (g_database.current_page < 2 || g_database.current_page_count == 0)
+	if (g_database.selected_page < FIRST_PAGE || g_database.selected_page_count == 0)
 		return MDBE_NO_ROW_SELECTED;
 
-	*page = g_database.current_page;
+	*page = g_database.selected_page;
 	return 0;
 }
 
 
-int mdb_seek_by_rowid (uint8_t table, uint32_t rowid)
+int mdb_select_by_rowid (uint8_t table, uint32_t rowid)
 {
 	int err;
 	uint32_t current_rowid = 0;
 
 	if (!g_database.fp)
-		return -1;
+		return MDBE_NOT_OPEN;
 
 	while (1)
 	{
@@ -820,31 +828,31 @@ int mdb_seek_by_rowid (uint8_t table, uint32_t rowid)
 }
 
 
-int mdb_seek_by_page (uint32_t page)
+int mdb_select_by_page (uint32_t page)
 {
 	int err;
 
 	if (!g_database.fp)
 		return -1;
 
-	if (page < 2)
+	if (page < FIRST_PAGE)
 		return -1;
 
-	g_database.current_page = page;
+	g_database.selected_page = page;
 
-	if ((err = read_page (g_database.current_page)))
+	if ((err = read_page (g_database.selected_page)))
 	{
-		g_database.current_page = 0;
-		g_database.current_page_count = 0;
+		g_database.selected_page = 0;
+		g_database.selected_page_count = 0;
 		return err;
 	}
 
-	g_database.current_page_count = unpack_uint32_little (g_database.tmp);
+	g_database.selected_page_count = unpack_uint32_little (g_database.tmp);
 
-	if (g_database.current_page_count == 0)
+	if (g_database.selected_page_count == 0)
 	{
-		g_database.current_page = 0;
-		g_database.current_page_count = 0;
+		g_database.selected_page = 0;
+		g_database.selected_page_count = 0;
 		return -1;
 	}
 
@@ -860,26 +868,29 @@ int mdb_walk (uint8_t table, bool restart)
 		return -1;
 
 	if (restart)
-		g_database.current_page = 2;
+		g_database.selected_page = FIRST_PAGE;
 	else
-		g_database.current_page += g_database.current_page_count;
+		g_database.selected_page += g_database.selected_page_count;
+
+	if (g_database.selected_page < FIRST_PAGE)
+		return -1;
 
 	while (1)
 	{
-		if ((err = read_page (g_database.current_page)))
+		if ((err = read_page (g_database.selected_page)))
 			return err;
 
-		g_database.current_page_count = unpack_uint32_little (g_database.tmp);
+		g_database.selected_page_count = unpack_uint32_little (g_database.tmp);
 		uint32_t rowid = unpack_uint32_little (g_database.tmp+4);
 		uint32_t tableid = g_database.tmp[8];
 
-		if (g_database.current_page_count == 0)
+		if (g_database.selected_page_count == 0)
 			return 1;
 
 		if (rowid > 0 && tableid == table)
 			return 0;
 
-		g_database.current_page += g_database.current_page_count;
+		g_database.selected_page += g_database.selected_page_count;
 	}
 }
 
@@ -888,6 +899,8 @@ int mdb_get_next_rowid (uint8_t table, uint32_t *rowid)
 {
 	int err;
 	uint32_t maxrowid = 0;
+	uint32_t selected_page = g_database.selected_page;
+	uint32_t selected_page_count = g_database.selected_page_count;
 
 	if (!g_database.fp)
 		return MDBE_NOT_OPEN;
@@ -911,6 +924,9 @@ int mdb_get_next_rowid (uint8_t table, uint32_t *rowid)
 		maxrowid = MAX (maxrowid, current_rowid);
 	}
 
+	g_database.selected_page = selected_page;
+	g_database.selected_page_count = selected_page_count;
+
 	if (maxrowid == 0xFFFFFFFF)
 		return MDBE_FULL;
 
@@ -929,11 +945,12 @@ int mdb_update_begin (uint32_t valuelen)
 	if (!g_database.fp)
 		return MDBE_NOT_OPEN;
 
+	/* Also checks if a row is currently selected */
 	if ((err = mdb_get_rowid (&table, &rowid)))
 		return err;
 
-	g_database.update_page = g_database.current_page;
-	g_database.update_page_count = g_database.current_page_count;
+	g_database.update_page = g_database.selected_page;
+	g_database.update_page_count = g_database.selected_page_count;
 
 	/* Begin creating the replacement row */
 	if ((err = mdb_insert_begin (table, valuelen)))
@@ -941,12 +958,12 @@ int mdb_update_begin (uint32_t valuelen)
 
 	/* Overwrite row header to set rowid */
 	memset (g_database.tmp, 0, g_database.page_size);
-	pack_uint32_little (g_database.tmp, g_database.current_page_count);
+	pack_uint32_little (g_database.tmp, g_database.insert_page_count);
 	pack_uint32_little (g_database.tmp+4, rowid);
 	g_database.tmp[8] = table;
 	pack_uint32_little (g_database.tmp+9, valuelen);
 
-	if ((err = write_page (g_database.current_page)))
+	if ((err = write_page (g_database.insert_page)))
 		return err;
 
 	return 0;
@@ -966,19 +983,30 @@ int mdb_update_finalize (void)
 	if (!g_database.fp)
 		return MDBE_NOT_OPEN;
 
-	if (g_database.update_page < 2 || g_database.update_page_count == 0)
+	if (g_database.update_page < FIRST_PAGE || g_database.update_page_count == 0)
+		return -1;
+
+	if (g_database.insert_page < FIRST_PAGE || g_database.insert_page_count == 0)
 		return -1;
 
 	/* Set journal to nuke old row */
-	if ((err = set_journal (JOURNAL0, g_database.update_page, g_database.update_page_count)))
+	if ((err = set_journal (JOURNAL1, g_database.update_page, g_database.update_page_count)))
 		return err;
 
 	if ((err = cleanup_journal ()))
 		return err;
 
+	/* Select the new row, if the old row was selected */
+	if (g_database.selected_page == g_database.update_page)
+	{
+		g_database.selected_page = g_database.insert_page;
+		g_database.selected_page_count = g_database.insert_page_count;
+	}
+
 	g_database.update_page = 0;
 	g_database.update_page_count = 0;
-	g_database.insert_offset = 0;
+	g_database.insert_page = 0;
+	g_database.insert_page_count = 0;
 
 	return 0;
 }
@@ -1008,14 +1036,20 @@ int mdb_delete (void)
 	if (!g_database.fp)
 		return MDBE_NOT_OPEN;
 
-	if (g_database.current_page < 2 || g_database.current_page_count == 0)
+	if (g_database.insert_page || g_database.update_page)
+		return MDBE_BUSY;
+
+	if (g_database.selected_page < FIRST_PAGE || g_database.selected_page_count == 0)
 		return MDBE_NO_ROW_SELECTED;
 
-	if ((err = set_journal (JOURNAL0, g_database.current_page, g_database.current_page_count)))
+	if ((err = set_journal (JOURNAL0, g_database.selected_page, g_database.selected_page_count)))
 		return err;
 
 	if ((err = cleanup_journal ()))
 		return err;
+
+	g_database.selected_page = 0;
+	g_database.selected_page_count = 0;
 
 	return 0;
 }
