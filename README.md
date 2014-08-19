@@ -2,6 +2,9 @@ MeagerDB
 ========
 
 
+NOTE: WIP; missing unit-tests.
+
+
 An encrypted database designed for low memory footprint and simplicity of code.
 Designed for use on RAM-limited systems (microcontrollers).
 Designed to optimize for code simplicity first, read performance second, and write performance third.
@@ -27,3 +30,8 @@ functionality found in search.h.
 See `meagerdb.h`, `keyvalue.h`, and `search.h` for an API reference.
 See `database-specified.txt` for file format specification.
 
+
+
+Dependencies
+------------
+ * strong-arm library
