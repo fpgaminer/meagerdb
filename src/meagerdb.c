@@ -123,12 +123,11 @@ static void _decrypt (uint8_t *dst, uint8_t const key[static 64], uint8_t const 
 }
 
 
-int mdb_create (char const *path, uint8_t const *password, size_t password_len)
+int mdb_create (char const *path, uint8_t const *password, size_t password_len, uint64_t iteration_count)
 {
 	int err;
 	const uint32_t page_size = MDB_DEFAULT_PAGE_SIZE;
 	const uint32_t database_header_len = roundup_uint32 (MDB_HEADER_SIZE+MDB_HEADER_PARAMS_SIZE*2, page_size);
-	const uint64_t iteration_count = 10000;
 	uint8_t derived_keys[ENCRYPTION_KEY_SIZE+MAC_KEY_SIZE];
 	uint8_t *encryption_key = derived_keys;
 	uint8_t *mac_key = derived_keys+ENCRYPTION_KEY_SIZE;

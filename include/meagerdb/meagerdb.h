@@ -14,7 +14,7 @@
 
 
 /* Create a MeagerDB at the given 'path', using the given 'password'. */
-int mdb_create (char const *path, uint8_t const *password, size_t password_len);
+int mdb_create (char const *path, uint8_t const *password, size_t password_len, uint64_t iteration_count);
 
 
 int mdb_open (char const *path, uint8_t const *password, size_t password_len);
