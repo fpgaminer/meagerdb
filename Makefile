@@ -3,7 +3,8 @@
 BIN_NAME=libmeagerdb.a
 C_SOURCES = \
 	src/meagerdb.c \
-	src/keyvalue.c
+	src/keyvalue.c \
+	src/ciphers.c
 
 
 SRC_EXT = c

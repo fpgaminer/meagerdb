@@ -8,17 +8,20 @@
 
 
 /* Filesystem */
-void *mdba_fopen (char const *path, char const *mode);
+int mdba_open (char const *path, int flags);
 
-int mdba_fclose (void *fp);
+int mdba_close (int fd);
 
-size_t mdba_fread (void *dst, size_t size, size_t nmemb, void *stream);
+/* Must read count bytes, otherwise consider it a failure.  Return -1 on failure, 0 on success. */
+int mdba_read (int fd, void *buf, size_t count);
 
-size_t mdba_fwrite (void const *src, size_t size, size_t nmemb, void *stream);
+/* Must write count bytes, otherwise consider it a failure.  Return -1 on failure, 0 on success. */
+int mdba_write (int fd, void const *buf, size_t count);
 
-int mdba_fseek (void *stream, int64_t offset, int whence);
+/* Return -1 on failure, 0 on success. */
+int mdba_lseek (int fd, uint64_t offset, int whence);
 
-int mdba_fflush (void *stream);
+int mdba_fsync (int fd);
 
 
 /* Misc */

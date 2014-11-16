@@ -22,7 +22,7 @@ static bool is_empty_key (uint8_t const key[static MDBK_KEY_LEN])
 
 _Static_assert (MDBK_KEY_LEN < (0xFFFFFFFF-4), "MDBK_KEY_LEN too big.");
 
-int mdbk_update (MDBK_UPDATE_ENTRY const *updates, size_t update_count)
+int mdbk_update (MDB *db, MDBK_UPDATE_ENTRY const *updates, size_t update_count)
 {
 	int err;
 	uint8_t buf[MAX (32, MDBK_KEY_LEN + 4)];
@@ -47,7 +47,7 @@ int mdbk_update (MDBK_UPDATE_ENTRY const *updates, size_t update_count)
 	{
 		bool updated = false;
 
-		if ((err = mdb_read_value (buf, offset, MDBK_KEY_LEN+4)))
+		if ((err = mdb_read_value (db, buf, offset, MDBK_KEY_LEN+4)))
 			return err;
 
 		if (is_empty_key (buf))
@@ -88,7 +88,7 @@ int mdbk_update (MDBK_UPDATE_ENTRY const *updates, size_t update_count)
 	}
 
 	/* Begin updating row */
-	if ((err = mdb_update_begin (total_len)))
+	if ((err = mdb_update_begin (db, total_len)))
 		return err;
 
 	/* Copy new key-value pairs */
@@ -97,13 +97,13 @@ int mdbk_update (MDBK_UPDATE_ENTRY const *updates, size_t update_count)
 		memmove (buf, updates[i].key, MDBK_KEY_LEN);
 		pack_uint32_little (buf+MDBK_KEY_LEN, updates[i].valuelen);
 
-		if ((err = mdb_update_continue (buf, MDBK_KEY_LEN + 4)))
+		if ((err = mdb_update_continue (db, buf, MDBK_KEY_LEN + 4)))
 			return err;
 
 		if (!updates[i].value)
 			continue;
 
-		if ((err = mdb_update_continue (updates[i].value, updates[i].valuelen)))
+		if ((err = mdb_update_continue (db, updates[i].value, updates[i].valuelen)))
 			return err;
 	}
 
@@ -114,13 +114,13 @@ int mdbk_update (MDBK_UPDATE_ENTRY const *updates, size_t update_count)
 	{
 		bool updated = false;
 
-		if ((err = mdb_read_value (buf, offset, MDBK_KEY_LEN+4)))
+		if ((err = mdb_read_value (db, buf, offset, MDBK_KEY_LEN+4)))
 			return err;
 
 		if (is_empty_key (buf))
 		{
 			/* Write terminator */
-			if ((err = mdb_update_continue (buf, MDBK_KEY_LEN+4)))
+			if ((err = mdb_update_continue (db, buf, MDBK_KEY_LEN+4)))
 				return err;
 			break;
 		}
@@ -154,10 +154,10 @@ int mdbk_update (MDBK_UPDATE_ENTRY const *updates, size_t update_count)
 		{
 			uint32_t l = MIN (remaining, sizeof (buf));
 
-			if ((err = mdb_read_value (buf, offset, l)))
+			if ((err = mdb_read_value (db, buf, offset, l)))
 				return err;
 
-			if ((err = mdb_update_continue (buf, l)))
+			if ((err = mdb_update_continue (db, buf, l)))
 				return err;
 
 			remaining -= l;
@@ -166,14 +166,14 @@ int mdbk_update (MDBK_UPDATE_ENTRY const *updates, size_t update_count)
 	}
 
 	/* Finalize */
-	if ((err = mdb_update_finalize ()))
+	if ((err = mdb_update_finalize (db)))
 		return err;
 
 	return 0;
 }
 
 
-int64_t mdbk_get_value (void *dst, uint8_t const key[static MDBK_KEY_LEN], size_t maxlen)
+int64_t mdbk_get_value (MDB *db, void *dst, uint8_t const key[static MDBK_KEY_LEN], size_t maxlen)
 {
 	int err;
 	uint32_t offset = 0;
@@ -182,7 +182,7 @@ int64_t mdbk_get_value (void *dst, uint8_t const key[static MDBK_KEY_LEN], size_
 
 	while (1)
 	{
-		if ((err = mdb_read_value (buf, offset, MDBK_KEY_LEN+4)))
+		if ((err = mdb_read_value (db, buf, offset, MDBK_KEY_LEN+4)))
 			return err;
 
 		if (is_empty_key (buf))
@@ -202,7 +202,7 @@ int64_t mdbk_get_value (void *dst, uint8_t const key[static MDBK_KEY_LEN], size_
 				if (valuelen > maxlen)
 					return MDBE_DATA_TOO_BIG;
 
-				if ((err = mdb_read_value (dst, offset, valuelen)))
+				if ((err = mdb_read_value (db, dst, offset, valuelen)))
 					return err;
 			}
 
@@ -217,7 +217,7 @@ int64_t mdbk_get_value (void *dst, uint8_t const key[static MDBK_KEY_LEN], size_
 }
 
 
-int mdbk_read_key (uint8_t dst[static MDBK_KEY_LEN], uint32_t idx)
+int mdbk_read_key (MDB *db, uint8_t dst[static MDBK_KEY_LEN], uint32_t idx)
 {
 	int err;
 	uint32_t offset = 0;
@@ -226,7 +226,7 @@ int mdbk_read_key (uint8_t dst[static MDBK_KEY_LEN], uint32_t idx)
 
 	for (uint32_t current_idx = 0; ; ++current_idx)
 	{
-		if ((err = mdb_read_value (buf, offset, MDBK_KEY_LEN+4)))
+		if ((err = mdb_read_value (db, buf, offset, MDBK_KEY_LEN+4)))
 			return err;
 
 		if (is_empty_key (buf))
@@ -253,12 +253,12 @@ int mdbk_read_key (uint8_t dst[static MDBK_KEY_LEN], uint32_t idx)
 }
 
 
-int mdbk_get_uint32 (uint32_t *dst, uint8_t const key[static MDBK_KEY_LEN])
+int mdbk_get_uint32 (MDB *db, uint32_t *dst, uint8_t const key[static MDBK_KEY_LEN])
 {
 	int64_t err;
 	uint8_t buf[4];
 
-	if ((err = mdbk_get_value (buf, key, 4)) < 0)
+	if ((err = mdbk_get_value (db, buf, key, 4)) < 0)
 		return (int)err;
 
 	if (err != 4)

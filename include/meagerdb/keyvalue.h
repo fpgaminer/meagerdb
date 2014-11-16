@@ -2,6 +2,7 @@
 #define __MEAGERDB_KEYVALUE_H__
 
 #include <stdint.h>
+#include <meagerdb/meagerdb.h>
 
 
 #define MDBK_KEY_LEN 8
@@ -18,7 +19,7 @@ typedef struct
 /* 
  * Update the currently selected row using a list of key-value updates.
  */
-int mdbk_update (MDBK_UPDATE_ENTRY const *updates, size_t update_count);
+int mdbk_update (MDB *db, MDBK_UPDATE_ENTRY const *updates, size_t update_count);
 
 
 /* 
@@ -31,18 +32,18 @@ int mdbk_update (MDBK_UPDATE_ENTRY const *updates, size_t update_count);
  *
  * Returns length of data written, or negative on error.
  */
-int64_t mdbk_get_value (void *dst, uint8_t const key[static MDBK_KEY_LEN], size_t maxlen);
+int64_t mdbk_get_value (MDB *db, void *dst, uint8_t const key[static MDBK_KEY_LEN], size_t maxlen);
 
 
 /*
  * Reads the 'idx'th key from the currently selected row.
  */
-int mdbk_read_key (uint8_t dst[static MDBK_KEY_LEN], uint32_t idx);
+int mdbk_read_key (MDB *db, uint8_t dst[static MDBK_KEY_LEN], uint32_t idx);
 
 
 /* The following are helpful functions that use mdbk_read_value, but parse the result into
  * a type.
  */
-int mdbk_get_uint32 (uint32_t *dst, uint8_t const key[static MDBK_KEY_LEN]);
+int mdbk_get_uint32 (MDB *db, uint32_t *dst, uint8_t const key[static MDBK_KEY_LEN]);
 
 #endif

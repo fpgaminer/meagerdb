@@ -28,7 +28,7 @@ functionality found in search.h.
 
 
 See `meagerdb.h`, `keyvalue.h`, and `search.h` for an API reference.
-See `database-specified.txt` for file format specification.
+See `database-specification.md` for file format specification.
 
 
 

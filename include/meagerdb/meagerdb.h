@@ -7,29 +7,70 @@
 #include <meagerdb/errorcodes.h>
 
 
-/* We require limits on some database properties, to fit the implementation into a reasonable amount
- * of RAM. */
+/* 
+ * We require limits on some database properties, to fit the implementation into a reasonable amount
+ * of RAM.
+ * MDB_MAX_PAGE_SIZE will affect the size of the MDB struct.
+ */
+
 #define MDB_DEFAULT_PAGE_SIZE 256
-#define MDB_MAX_PAGE_SIZE 256
+#define MDB_MAX_PAGE_SIZE 512
+
+
+/* Extra 8 bytes so we can append MAC tweak to pages during authentication */
+#define MDB_TMP_SIZE (MDB_MAX_PAGE_SIZE+8)
+
+/* Information about the currently open database */
+typedef struct
+{
+	int fd;
+	uint32_t page_size;
+	uint32_t real_page_size;   /* How much can actually be stored in page */
+	uint8_t keys[128];
+	uint64_t page_offset;      /* File position where Pages start */
+
+	/* Selected Page */
+	uint32_t selected_page;
+	uint32_t selected_page_count;
+
+	/* Row being inserted */
+	uint32_t insert_page;
+	uint32_t insert_page_count;
+	uint32_t insert_offset;
+
+	/* Pointer to old page during an update */
+	uint32_t update_page;
+	uint32_t update_page_count;
+
+	uint32_t tmp_page;
+	uint8_t tmp[MDB_TMP_SIZE];
+} MDB;
+
 
 
 /* Create a MeagerDB at the given 'path', using the given 'password'. */
-int mdb_create (char const *path, uint8_t const *password, size_t password_len, uint64_t iteration_count);
+int mdb_create (MDB *db, char const *path, uint8_t const *password, size_t password_len, uint64_t iteration_count);
 
 
-int mdb_open (char const *path, uint8_t const *password, size_t password_len);
+int mdb_open (MDB *db, char const *path, uint8_t const *password, size_t password_len);
 
 
-void mdb_close (void);
+void mdb_close (MDB *db);
 
 
-int mdb_walk (uint8_t table, bool restart);
+/*
+ * Iterate all the rows in the database, for the given table.
+ * With `restart` == true, the first row is selected.
+ * With `restart` == false, the next row is selected.
+ * Return value is less than 0 for error, 0 for success, and 1 if there are no more rows.
+ */
+int mdb_walk (MDB *db, uint8_t table, bool restart);
 
 
-int mdb_select_by_rowid (uint8_t table, uint32_t rowid);
+int mdb_select_by_rowid (MDB *db, uint8_t table, uint32_t rowid);
 
 
-int mdb_select_by_page (uint32_t page);
+int mdb_select_by_page (MDB *db, uint32_t page);
 
 
 /* 
@@ -37,31 +78,26 @@ int mdb_select_by_page (uint32_t page);
  * 'dst' may be NULL, to just get the value length.
  * Will not write more than 'maxlen' bytes to 'dst'.
  */
-int64_t mdb_get_value (void *dst, size_t maxlen);
+int64_t mdb_get_value (MDB *db, void *dst, size_t maxlen);
 
 
 /* Read (len) bytes at (offset) from the selected row's value. */
-int mdb_read_value (void *dst, uint32_t offset, size_t len);
+int mdb_read_value (MDB *db, void *dst, uint32_t offset, size_t len);
 
 
 /*
- * Get current row's rowid and tableid.
+ * Get selected row's page number, rowid, and tableid.
+ * Any may be NULL, if that value is not desired.
  */
-int mdb_get_rowid (uint8_t *table, uint32_t *rowid);
-
-
-/*
- * Get current row's page number.
- */
-int mdb_get_page (uint32_t *page);
+int mdb_get_rowid (MDB *db, uint32_t *page, uint8_t *table, uint32_t *rowid);
 
 
 /* Return the next available (unused) rowid, or 0 on error. */
-int mdb_get_next_rowid (uint8_t table, uint32_t *rowid);
+int mdb_get_next_rowid (MDB *db, uint8_t table, uint32_t *rowid);
 
 
 /* NOTE: Sets the selected row to the inserted row. */
-int mdb_insert (uint8_t table, void const *value, uint32_t valuelen);
+int mdb_insert (MDB *db, uint8_t table, void const *value, uint32_t valuelen);
 
 
 /* 
@@ -69,31 +105,31 @@ int mdb_insert (uint8_t table, void const *value, uint32_t valuelen);
  * Call mdb_insert_continue as many times as necessary to provide the row data.
  * When all data has been provided, call mdb_insert_finalize.
  */
-int mdb_insert_begin (uint8_t table, uint32_t valuelen);
+int mdb_insert_begin (MDB *db, uint8_t table, uint32_t valuelen);
 
 
-int mdb_insert_continue (void const *data, size_t len);
+int mdb_insert_continue (MDB *db, void const *data, size_t len);
 
 
 /* NOTE: Sets the selected row to the inserted row. */
-int mdb_insert_finalize (void);
+int mdb_insert_finalize (MDB *db);
 
 
-int mdb_update_begin (uint32_t valuelen);
+int mdb_update_begin (MDB *db, uint32_t valuelen);
 
 
-int mdb_update_continue (void const *data, size_t len);
+int mdb_update_continue (MDB *db, void const *data, size_t len);
 
 
-int mdb_update_finalize (void);
+int mdb_update_finalize (MDB *db);
 
 
-/* Must select the row first with mdb_seek_* or mdb_walk */
-int mdb_update (void const *value, uint32_t valuelen);
+/* Update the selected row */
+int mdb_update (MDB *db, void const *value, uint32_t valuelen);
 
 
-/* Must select the row first with mdb_seek_* or mdb_walk */
-int mdb_delete (void);
+/* Delete the selected row */
+int mdb_delete (MDB *db);
 
 
 #endif

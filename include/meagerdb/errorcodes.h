@@ -4,7 +4,7 @@
 enum {
 	/* -1 should never be returned, unless there was an internal error or you've done something
 	 * horribly wrong. */
-	MDBE_FOPEN = -2,                   /* fopen failed */
+	MDBE_OPEN = -2,                    /* open failed */
 	MDBE_IO = -3,                      /* IO error */
 	MDBE_NOT_MDB = -4,                 /* File is not a Meager DB */
 	MDBE_BAD_VERSION = -5,             /* Incompatible MDB version */
@@ -24,6 +24,7 @@ enum {
 	MDBE_BAD_ARGUMENT = -19,           /* A bad argument was passed to the function */
 	MDBE_BAD_TYPE = -20,               /* Key-Value: Value is not of the requested type */
 	MDBE_NOT_FOUND = -21,              /* */
+	MDBE_UNSUPPORTED_CIPHER = -22,     /* Ciphersuite is not supported */
 };
 
 #endif
