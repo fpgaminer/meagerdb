@@ -80,10 +80,15 @@ int mdb_create (MDB *db, char const *path, uint8_t const *password, size_t passw
 
 	/* Open database file */
 	if ((db->fd = mdba_open (path, O_RDWR | O_CREAT)) == -1)
+	{
+		db->fd = 0;
 		return MDBE_OPEN;
+	}
 
 	db->page_size = page_size;
 	db->page_offset = header_len + 2 * params_len;
+	db->real_page_size = (db->page_size - 32) / MDBC_ENCRYPTION_BLOCK_SIZE;
+	db->real_page_size *= MDBC_ENCRYPTION_BLOCK_SIZE;
 
 	/* Generate Encryption Keys */
 	mdba_read_urandom (db->keys, 128);
@@ -168,7 +173,10 @@ int mdb_open (MDB *db, char const *path, uint8_t const *password, size_t passwor
 	memset (db, 0, sizeof (MDB));
 
 	if ((db->fd = mdba_open (path, O_RDWR)) == -1)
+	{
+		db->fd = 0;
 		return MDBE_OPEN;
+	}
 
 	/* Read database header */
 	RAW_HEADER *header = (RAW_HEADER *)(db->tmp);
@@ -305,6 +313,11 @@ static int write_page (MDB *db, uint32_t page)
 		return MDBE_IO;
 
 	if (mdba_write (db->fd, db->tmp, db->real_page_size + 32))
+		return MDBE_IO;
+
+	/* Padding, if necessary.
+ 	 * Re-use tmp; blanking tmp would just cost extra cycles, and there is no risk. */
+	if (mdba_write (db->fd, db->tmp, db->page_size - db->real_page_size - 32))
 		return MDBE_IO;
 
 	if (mdba_fsync (db->fd))
