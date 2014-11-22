@@ -761,7 +761,7 @@ int mdb_select_by_page (MDB *db, uint32_t page)
 	int err;
 
 	if (!db->fd)
-		return -1;
+		return MDBE_NOT_OPEN;
 
 	if (page < FIRST_PAGE)
 		return -1;
