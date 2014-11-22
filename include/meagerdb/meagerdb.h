@@ -67,9 +67,17 @@ void mdb_close (MDB *db);
 int mdb_walk (MDB *db, uint8_t table, bool restart);
 
 
+/* Make the row specified by `table` and `rowid` the currently selected row. */
 int mdb_select_by_rowid (MDB *db, uint8_t table, uint32_t rowid);
 
 
+/* 
+ * Select a row by its Page.  This is faster than selecting by rowid, but
+ * doesn't have as many safety checks.  It should be used with caution.  All guarantees
+ * are broken if this function is used to select a Page that isn't the beginning of a row.
+ *
+ * This is O(1), whereas selecting by rowid is O(N); N == number of rows in DB.
+ */
 int mdb_select_by_page (MDB *db, uint32_t page);
 
 
@@ -115,6 +123,10 @@ int mdb_insert_continue (MDB *db, void const *data, size_t len);
 int mdb_insert_finalize (MDB *db);
 
 
+/* Update the selected row */
+int mdb_update (MDB *db, void const *value, uint32_t valuelen);
+
+
 int mdb_update_begin (MDB *db, uint32_t valuelen);
 
 
@@ -122,10 +134,6 @@ int mdb_update_continue (MDB *db, void const *data, size_t len);
 
 
 int mdb_update_finalize (MDB *db);
-
-
-/* Update the selected row */
-int mdb_update (MDB *db, void const *value, uint32_t valuelen);
 
 
 /* Delete the selected row */
