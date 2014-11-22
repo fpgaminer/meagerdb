@@ -79,7 +79,7 @@ int mdb_create (MDB *db, char const *path, uint8_t const *password, size_t passw
 	memset (db, 0, sizeof (MDB));
 
 	/* Open database file */
-	if ((db->fd = mdba_open (path, O_RDWR | O_CREAT)) == -1)
+	if ((db->fd = mdba_open (path, O_RDWR | O_CREAT | O_EXCL)) == -1)
 	{
 		db->fd = 0;
 		return MDBE_OPEN;
