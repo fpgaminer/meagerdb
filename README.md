@@ -1,8 +1,8 @@
-MeagerDB
+meagerDB
 ========
 
 
-NOTE: WIP; missing unit-tests.
+NOTE: WIP; needs more unit-tests, more documentation, and search functionality.  Would be nice to have a SQL parsing layer.
 
 
 An encrypted database designed for low memory footprint and simplicity of code.
@@ -22,7 +22,7 @@ and writing a new key-value store that obeys the respective table's schema.
 
 
 Searching the database can be accomplished manually using `mdb_walk`, or using the included search
-functionality found in search.h.
+functionality found in search.h (TODO).
 
 
 
