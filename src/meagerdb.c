@@ -591,6 +591,9 @@ int mdb_insert_finalize (MDB *db)
 {
 	int err;
 
+	if (!db->fd)
+		return MDBE_NOT_OPEN;
+
 	if (db->update_page)
 		return -1;
 
